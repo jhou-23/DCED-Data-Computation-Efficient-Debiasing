@@ -1,0 +1,2 @@
+python stereoset.py --model_name_or_path $1
+python stereoset_eval.py --persistent_dir /home/james/Code/science_fair/ScienceFairDebias  --predictions_file stereoset_intra-BertForMaskedLM_c-$1_s-likelihood_d-dev.json --predictions_dir /home/james/Code/science_fair/ScienceFairDebias/results/stereoset

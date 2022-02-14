@@ -27,6 +27,7 @@ from transformers import (
     get_scheduler,
     set_seed,
 )
+from transformers import AdapterConfig
 from transformers.file_utils import get_full_repo_name
 from transformers.utils.versions import require_version
 
@@ -170,6 +171,7 @@ def parse_args():
         "--hub_model_id", type=str, help="The name of the repository to keep in sync with the local `output_dir`."
     )
     parser.add_argument("--hub_token", type=str, help="The token to use to push to the Model Hub.")
+    parser.add_argument("--adapter", type=bool, help="Adapter or not")
     args = parser.parse_args()
 
     # Sanity checks
@@ -241,7 +243,7 @@ def main():
                 "20200501.en",
                 split=f"train[90%:]",
             )
-            word_map = {"african":"caucasian", "African":"Caucasian", "caucasian":"african", "Caucasian":"African", "black":"white", "Black":"White", "white":"black", "White":"Black", "africa":"europe", "Africa":"Europe", "europe":"africa", "Europe":"Africa"}
+            word_map = {"african":"caucasian", "African":"Caucasian", "caucasian":"african", "Caucasian":"African", "africa":"europe", "Africa":"Europe", "europe":"africa", "Europe":"Africa"}
 
             def onein(a):
                 for word in word_map.keys():
@@ -307,6 +309,12 @@ def main():
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForMaskedLM.from_config(config)
+    
+    if args.adapter:
+        adapter_config = AdapterConfig.load("pfeiffer", reduction_factor=12)
+        model.add_adapter('cda', config=adapter_config)
+        model.train_adapter('cda')
+        model.set_active_adapters('cda')
 
     model.resize_token_embeddings(len(tokenizer))
 
@@ -331,7 +339,7 @@ def main():
             )
         max_seq_length = min(args.max_seq_length, tokenizer.model_max_length)
 
-    tgt_map = {"african":"caucasian", "African":"Caucasian", "caucasian":"african", "Caucasian":"African", "black":"white", "Black":"White", "white":"black", "White":"Black", "africa":"europe", "Africa":"Europe", "europe":"africa", "Europe":"Africa"}
+    tgt_map = {"african":"caucasian", "African":"Caucasian", "caucasian":"african", "Caucasian":"African", "africa":"europe", "Africa":"Europe", "europe":"africa", "Europe":"Africa"}
 
     def replace_tgt(examples):
         words = examples["text"].split(" ")
@@ -517,7 +525,8 @@ def main():
 
             if completed_steps >= args.max_train_steps:
                 break
-        model.save_pretrained("./bert-cda-uncased-%d/" %epoch, save_config=True)
+        model.save_pretrained("./bert-adaptercda-uncased-%d/" %epoch, save_config=True)
+        model.save_adapter("./cda_adapter", "cda")
 
         model.eval()
         losses = []

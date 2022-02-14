@@ -89,6 +89,7 @@ parser.add_argument(
     default=1,
     help="The batch size to use during StereoSet intrasentence evaluation.",
 )
+parser.add_argument("--adapter", action="store", type=str, default=None, help="Adapter")
 
 
 if __name__ == "__main__":
@@ -112,6 +113,9 @@ if __name__ == "__main__":
 
     intrasentence_model = getattr(models, args.intrasentence_model).from_pretrained(args.model_name_or_path)
     intrasentence_model.eval()
+
+    if args.adapter != None:
+        intrasentence_model.set_active_adapters("cda")
 
     tokenizer = transformers.AutoTokenizer.from_pretrained("bert-base-uncased"
         # args.model_name_or_path, add_prefix_space=add_prefix_space

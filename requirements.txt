@@ -2,3 +2,4 @@ transformers
 tqdm
 accelerate
 datasets
+adapter-transformers

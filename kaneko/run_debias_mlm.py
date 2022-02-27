@@ -53,6 +53,7 @@ from transformers import (
     PreTrainedTokenizer,
     get_linear_schedule_with_warmup,
 )
+from transformers import AdapterConfig
 
 
 try:
@@ -414,15 +415,8 @@ def train(args, data, datasets, model: PreTrainedModel, original_model, tokenize
         else:
             labels = None
         inputs = inputs.to(args.device)
-        if args.model_type == 'roberta':
-            final_layer_hiddens, first_token_hidden, all_layer_hiddens = model.roberta(inputs)
-            if 'neutral' != key:
-                with torch.no_grad():
-                    final_layer_original_hiddens, _, all_layer_original_hiddens = original_model.roberta(inputs)
-                if args.token_loss:
-                    token_predicts = model.lm_head(final_layer_hiddens)
-                    token_original = original_model.lm_head(final_layer_original_hiddens)
-        elif args.model_type == 'bert':
+        
+        if args.model_type == 'bert':
             temp_out = model.bert(inputs)
             final_layer_hiddens, first_token_hidden, all_layer_hiddens = temp_out.last_hidden_state, temp_out.pooler_output, temp_out.hidden_states
             if 'neutral' != key:
@@ -432,48 +426,6 @@ def train(args, data, datasets, model: PreTrainedModel, original_model, tokenize
                 if args.token_loss:
                     token_predicts = model.cls(final_layer_hiddens)
                     token_original = original_model.cls(final_layer_original_hiddens)
-        elif args.model_type == 'albert':
-            final_layer_hiddens, first_token_hidden, all_layer_hiddens = model.albert(inputs)
-            if 'neutral' != key:
-                with torch.no_grad():
-                    final_layer_original_hiddens, _, all_layer_original_hiddens = original_model.albert(inputs)
-                if args.token_loss:
-                    token_predicts = model.classifier(final_layer_hiddens)
-                    token_original = original_model.classifier(final_layer_original_hiddens)
-        elif args.model_type == 'dbert':
-            final_layer_hiddens, all_layer_hiddens = model.distilbert(inputs)
-            if 'neutral' != key:
-                with torch.no_grad():
-                    final_layer_original_hiddens, all_layer_original_hiddens = original_model.distilbert(inputs)
-                if args.token_loss:
-                    token_predicts = model.classifier(final_layer_hiddens)
-                    token_original = original_model.classifier(final_layer_original_hiddens)
-        elif args.model_type == 'electra':
-            final_layer_hiddens, all_layer_hiddens = model.electra(inputs)
-            if 'neutral' != key:
-                with torch.no_grad():
-                    final_layer_original_hiddens, all_layer_original_hiddens = original_model.electra(inputs)
-                if args.token_loss:
-                    hiddens = model.generator_predictions(final_layer_hiddens)
-                    token_predicts = model.generator_lm_head(hiddens)
-                    original_hiddens = original_model.generator_predictions(final_layer_original_hiddens)
-                    token_original = original_model.generator_lm_head(original_hiddens)
-        elif args.model_type == 'gpt2':
-            final_layer_hiddens, first_token_hidden, all_layer_hiddens = model.transformer(inputs)
-            if 'neutral' != key:
-                with torch.no_grad():
-                   final_layer_original_hiddens, _, all_layer_original_hiddens = original_model.transformer(inputs)
-                if args.token_loss:
-                    token_predicts = model.lm_head(final_layer_hiddens)
-                    token_original = original_model.lm_head(final_layer_original_hiddens)
-        elif args.model_type == 'gpt':
-            final_layer_hiddens, all_layer_hiddens = model.transformer(inputs)
-            if 'neutral' != key:
-                with torch.no_grad():
-                    final_layer_original_hiddens, all_layer_original_hiddens = original_model.transformer(inputs)
-                if args.token_loss:
-                    token_predicts = model.lm_head(final_layer_hiddens)
-                    token_original = original_model.lm_head(final_layer_original_hiddens)
 
         all_layer_hiddens = torch.stack(all_layer_hiddens, 2)
         if 'neutral' != key:
@@ -530,13 +482,15 @@ def train(args, data, datasets, model: PreTrainedModel, original_model, tokenize
                     tmp_loss = tmp_loss ** 2
                 tmp_loss *= alpha
                 loss += tmp_loss
-        else:
+        elif not args.adapter:
             #loss = criterion_ms(target_layer_hiddens, target_original_hiddens)
             loss = criterion_ms(all_layer_hiddens, all_original_hiddens, 3)
             if args.token_loss:
                 loss += criterion_ms(token_predicts, token_original, 2)
                 #loss += criterion_ms(hiddens, original_hiddens, 2)
             loss *= beta
+        else:
+            loss = 0.0
 
         return loss
 
@@ -566,8 +520,11 @@ def train(args, data, datasets, model: PreTrainedModel, original_model, tokenize
         for key in tqdm(dev_distribution):
             with torch.no_grad():
                 loss = forward(attributes_hiddens, dev_dataloaders, key)
-
-                eval_loss += loss.item()
+                
+                if args.adapter and key!='neutral':
+                    eval_loss += loss
+                else:
+                    eval_loss += loss.item()
 
                 model.zero_grad()
                 original_model.zero_grad()
@@ -618,13 +575,21 @@ def train(args, data, datasets, model: PreTrainedModel, original_model, tokenize
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
 
-            if args.fp16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+            if args.adapter and key!='neutral':
+                pass
             else:
-                loss.backward()
+                if args.fp16:
+                    with amp.scale_loss(loss, optimizer) as scaled_loss:
+                        scaled_loss.backward()
+                else:
+                    loss.backward()
 
-            train_loss += loss.item()
+            if args.adapter and key!='neutral':
+                train_loss += loss
+            else:
+                train_loss += loss.item()
+
+            
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
@@ -810,6 +775,7 @@ def main():
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
+    parser.add_argument("--adapter", type=bool, required=True, help="adapter")
     args = parser.parse_args()
 
     '''
@@ -930,6 +896,12 @@ def main():
         logger.info("Training new model from scratch")
         model = AutoModelWithLMHead.from_config(config)
         original_model = AutoModelWithLMHead.from_config(config)
+
+    if args.adapter:
+        adapter_config = AdapterConfig.load("pfeiffer", reduction_factor=12)
+        model.add_adapter('kaneko_loss', config=adapter_config)
+        model.train_adapter('kaneko_loss')
+        model.set_active_adapters('kaneko_loss')
 
     # GPT-2 and GPT do not have pad.
     if tokenizer._pad_token is None:

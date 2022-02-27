@@ -4,7 +4,7 @@ debias_layer=all # first last all
 loss_target=token # token sentence
 dev_data_size=1000
 seed=42
-alpha=0.05
+alpha=0.1
 beta=0.95
 
 if [ $model_type = 'bert' ]; then
@@ -53,4 +53,5 @@ CUDA_VISIBLE_DEVICES=$gpu python ../kaneko/run_debias_mlm.py \
     --weighted_loss $alpha $beta \
     --dev_data_size $dev_data_size \
     --square_loss \
+    --adapter True\
     --line_by_line

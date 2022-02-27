@@ -115,7 +115,7 @@ if __name__ == "__main__":
     intrasentence_model.eval()
 
     if args.adapter != None:
-        intrasentence_model.set_active_adapters("cda")
+        intrasentence_model.set_active_adapters(args.adapter)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained("bert-base-uncased"
         # args.model_name_or_path, add_prefix_space=add_prefix_space
